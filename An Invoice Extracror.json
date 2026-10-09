@@ -1,0 +1,312 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "invoice/extract",
+        "responseMode": "lastNode",
+        "options": {
+          "binaryPropertyName": "data"
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -304,
+        -32
+      ],
+      "id": "5357c16c-ae8f-493b-8247-27fd8b6b15d6",
+      "name": "Webhook",
+      "webhookId": "54ba6b37-e6ac-4a19-8f85-ce5ce809687d"
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "={{ Object.keys($binary || {})[0] || 'data' }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        -112,
+        -32
+      ],
+      "id": "6f60ce38-3388-40f9-a2ba-71837307b551",
+      "name": "Extract PDF Text"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "cachedResultName": "GPT-4O-MINI",
+          "mode": "list",
+          "value": "gpt-4o-mini"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "# ROLE\nYou are an expert invoice data extraction specialist. You receive raw text from invoice PDFs and extract structured data.\n\n# TASK\nExtract the following fields from the invoice text and return ONLY valid JSON:\n\n{\n  \"invoice_number\": \"string or null\",\n  \"invoice_date\": \"YYYY-MM-DD or null\",\n  \"vendor_name\": \"string or null\",\n  \"customer_name\": \"string or null\",\n  \"subtotal\": number or null,\n  \"tax\": number or null,\n  \"total\": number or null,\n  \"currency\": \"EGP | USD | EUR | SAR | AED\",\n  \"items\": [\n    {\n      \"description\": \"string\",\n      \"quantity\": number,\n      \"unit_price\": number,\n      \"total\": number\n    }\n  ]\n}\n\n# EXTRACTION RULES\n1. invoice_date MUST be in YYYY-MM-DD format\n2. All amounts must be numbers (no currency symbols in the number)\n3. currency: detect from symbol or text\n4. If a field is missing, use null\n5. items array: extract every line item\n6. subtotal = total before tax\n7. total = final amount including tax\n\n# OUTPUT FORMAT\nReturn ONLY valid JSON. No markdown fences. No explanation.\n\n# EXAMPLE OUTPUT\n{\n  \"invoice_number\": \"INV-2024-1234\",\n  \"invoice_date\": \"2024-06-15\",\n  \"vendor_name\": \"شركة النور للتوريدات\",\n  \"customer_name\": \"مطعم الأصيل\",\n  \"subtotal\": 1000,\n  \"tax\": 140,\n  \"total\": 1140,\n  \"currency\": \"EGP\",\n  \"items\": [\n    {\"description\": \"أرز\", \"quantity\": 10, \"unit_price\": 50, \"total\": 500},\n    {\"description\": \"زيت\", \"quantity\": 5, \"unit_price\": 100, \"total\": 500}\n  ]\n}\n\nStart now."
+            },
+            {
+              "content": "=Invoice text:\n{{ $json.text }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        128,
+        -16
+      ],
+      "id": "c71955e4-4096-4a46-a869-010a44efd743",
+      "name": "AI Extractor",
+      "credentials": {
+        "openAiApi": {
+          "id": null,
+          "name": "",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\n// Extract the model text from the OpenAI Responses API output (with fallbacks)\nlet aiResponse = '';\nif (Array.isArray(item.output)) {\n  for (const msg of item.output) {\n    if (Array.isArray(msg.content)) {\n      for (const c of msg.content) {\n        if (c.type === 'output_text' && c.text) aiResponse += c.text;\n      }\n    }\n  }\n} else if (item.message && item.message.content) {\n  aiResponse = item.message.content;\n} else if (typeof item.text === 'string') {\n  aiResponse = item.text;\n}\n\nlet parsed;\ntry {\n  const cleaned = aiResponse.replace(/```json|```/g, '').trim();\n  parsed = JSON.parse(cleaned);\n} catch (e) {\n  parsed = {\n    invoice_number: null,\n    invoice_date: null,\n    vendor_name: null,\n    customer_name: null,\n    subtotal: null,\n    tax: null,\n    total: null,\n    currency: 'EGP',\n    items: []\n  };\n}\n\nconst rawText = $('Extract PDF Text').first().json.text || '';\nconst binary = $('Webhook').first().binary || {};\nconst fileName = Object.values(binary)[0]?.fileName || '';\n\nconst num = (v) => (v === null || v === undefined || v === '' || isNaN(Number(v))) ? null : Number(v);\n\nreturn [{\n  json: {\n    invoice_number: parsed.invoice_number ?? null,\n    invoice_date: parsed.invoice_date ?? null,\n    vendor_name: parsed.vendor_name ?? null,\n    customer_name: parsed.customer_name ?? null,\n    subtotal: num(parsed.subtotal),\n    tax: num(parsed.tax),\n    total: num(parsed.total),\n    currency: parsed.currency || 'EGP',\n    items: Array.isArray(parsed.items) ? parsed.items : [],\n    raw_text: rawText.substring(0, 3000),\n    file_name: fileName\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        -16
+      ],
+      "id": "8c558e43-24cb-481d-bb09-551e1de48cc0",
+      "name": "Parse Json"
+    },
+    {
+      "parameters": {
+        "tableId": "bot_invoices",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "invoice_number",
+              "fieldValue": "={{ $json.invoice_number }}"
+            },
+            {
+              "fieldId": "invoice_date",
+              "fieldValue": "={{ $json.invoice_date }}"
+            },
+            {
+              "fieldId": "vendor_name",
+              "fieldValue": "={{ $json.vendor_name }}"
+            },
+            {
+              "fieldId": "customer_name",
+              "fieldValue": "={{ $json.customer_name }}"
+            },
+            {
+              "fieldId": "subtotal",
+              "fieldValue": "={{ $json.subtotal }}"
+            },
+            {
+              "fieldId": "tax",
+              "fieldValue": "={{ $json.tax }}"
+            },
+            {
+              "fieldId": "currency",
+              "fieldValue": "={{ $json.currency }}"
+            },
+            {
+              "fieldId": "total",
+              "fieldValue": "={{ $json.total }}"
+            },
+            {
+              "fieldId": "items",
+              "fieldValue": "={{ JSON.stringify($json.items) }}"
+            },
+            {
+              "fieldId": "raw_text",
+              "fieldValue": "={{ $json.raw_text }}"
+            },
+            {
+              "fieldId": "file_name",
+              "fieldValue": "={{ $json.file_name }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        624,
+        -16
+      ],
+      "id": "9a4eb344-fbc4-4e17-8f5a-9c8440d0d05b",
+      "name": "Save Invoice",
+      "credentials": {
+        "supabaseApi": {
+          "id": "jHf91rCtYwCQ9qVZ",
+          "name": "Supabase account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1",
+              "name": "status",
+              "type": "string",
+              "value": "success"
+            },
+            {
+              "id": "0fd9487c-1df0-4a52-9d72-6446ccbc5141",
+              "name": "invoice_number",
+              "type": "string",
+              "value": "={{ $('Parse Json').first().json.invoice_number }}"
+            },
+            {
+              "id": "53b506d0-61b9-4c3d-8371-2857cd2d9f48",
+              "name": "vendor_name",
+              "type": "string",
+              "value": "={{ $('Parse Json').first().json.vendor_name }}"
+            },
+            {
+              "id": "c1a0b2d3-0001-4000-8000-000000000001",
+              "name": "customer_name",
+              "type": "string",
+              "value": "={{ $('Parse Json').first().json.customer_name }}"
+            },
+            {
+              "id": "668e09d8-3895-452c-b023-f8192cd6b12c",
+              "name": "invoice_date",
+              "type": "string",
+              "value": "={{ $('Parse Json').first().json.invoice_date }}"
+            },
+            {
+              "id": "c1a0b2d3-0002-4000-8000-000000000002",
+              "name": "subtotal",
+              "type": "number",
+              "value": "={{ $('Parse Json').first().json.subtotal }}"
+            },
+            {
+              "id": "c1a0b2d3-0003-4000-8000-000000000003",
+              "name": "tax",
+              "type": "number",
+              "value": "={{ $('Parse Json').first().json.tax }}"
+            },
+            {
+              "id": "fa9662ca-5259-4e7e-8c52-8b2a61fec09b",
+              "name": "total",
+              "type": "number",
+              "value": "={{ $('Parse Json').first().json.total }}"
+            },
+            {
+              "id": "5c7a08e5-e242-4a2f-9e28-0cc1837d3874",
+              "name": "currency",
+              "type": "string",
+              "value": "={{ $('Parse Json').first().json.currency }}"
+            },
+            {
+              "id": "657b0495-4676-479c-b542-ecffe72b52d0",
+              "name": "items_count",
+              "type": "number",
+              "value": "={{ $('Parse Json').first().json.items.length }}"
+            },
+            {
+              "id": "8874b6a1-b814-4cc9-9334-bef7c8e261ad",
+              "name": "message",
+              "type": "string",
+              "value": "Invoice extracted successfully"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "53576cbf-797c-435e-8670-5dd4f2f6c49a",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        832,
+        -16
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract PDF Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract PDF Text": {
+      "main": [
+        [
+          {
+            "node": "AI Extractor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Extractor": {
+      "main": [
+        [
+          {
+            "node": "Parse Json",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Json": {
+      "main": [
+        [
+          {
+            "node": "Save Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Invoice": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "5509cd3e-ef25-479a-abfb-d299187008a1",
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp",
+    "instanceId": "889eb8c99fb0d2b879a29fcce4101c5056807687e42e12560f9b81fcb40e6aa4"
+  },
+  "nodeGroups": [],
+  "id": "BL5l1QEA9LMPfWQd",
+  "tags": []
+}
